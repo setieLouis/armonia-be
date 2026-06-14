@@ -172,6 +172,14 @@ app.get('/users', async (req, res) => {
   }
 });
 
+app.get('/hello', (req, res) => {
+  res.json({ 
+    message: 'Hello World! L\'API è attiva e funzionante.',
+    timestamp: new Date().toISOString(),
+    environment: process.env.K_SERVICE ? 'Cloud Run' : 'Local'
+  });
+});
+
 app.get('/', (req, res) => {
   res.json({ message: 'Microservizio attivo con logica notifiche completa' });
 });
