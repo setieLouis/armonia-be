@@ -1,3 +1,4 @@
 node_modules/
 package-lock.json
-chiave_admin.json.gitKey
+chiave_admin.json
+.gitKey
