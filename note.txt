@@ -1,0 +1,18 @@
+
+# Docker builld image 
+docker build -t fnm-node .
+
+#
+
+podman  run -d \
+  -v $(pwd):/workspace \
+  -w /workspace \
+  b8b2186423fd \
+  tail -f /dev/null
+
+  podman exec -it charming_shirley /bin/bash
+  npm install pdf-parse@1.1.1
+
+  
+podman exec -it sharp_lovelace /bin/bash
+podman start sharp_lovelace

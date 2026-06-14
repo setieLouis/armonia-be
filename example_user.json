@@ -1,0 +1,11 @@
+{
+    "fcmToken": "ezJIqty0QEB_2rAgNyPbcX:APA91bECTkyEndGmxSPrrkIc6y3ooJ9TRMiDp2XvHLrXBtYyKC-LKWoEnyNc-sqNMN-BIxAqeQebY1yvVufFX87TayG6k-D_6kDSFsOReqXRQxJe9_I4NZk",
+    "fcmUpdatedAt": "2026-06-14T02:08:38.212Z",
+    "water_settings": {
+        "enabled": true, 
+        "endTime": "22:00"
+    },
+    "water_status": {
+        "nextDrink": "2026-06-14T06:00:00.000Z"
+    }
+}
