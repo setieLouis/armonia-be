@@ -9,17 +9,22 @@ const port = process.env.PORT || 8080;
 // Configurazione "intelligente" di Firebase
 const serviceAccountPath = path.join(__dirname, 'chiave_admin.json');
 
-if (fs.existsSync(serviceAccountPath)) {
-  // 1. AMBIENTE LOCALE: Se il file esiste (sul tuo PC), usalo.
-  console.log("Inizializzazione Firebase con file chiave_admin.json locale.");
-  const serviceAccount = require(serviceAccountPath);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-} else {
-  // 2. CLOUD RUN: Se il file non c'è (su GitHub/Cloud Run), usa le credenziali predefinite.
-  console.log("Inizializzazione Firebase con Application Default Credentials (Cloud Run).");
-  admin.initializeApp();
+try {
+  if (fs.existsSync(serviceAccountPath)) {
+    // 1. AMBIENTE LOCALE: Se il file esiste (sul tuo PC), usalo.
+    console.log("Inizializzazione Firebase con file chiave_admin.json locale.");
+    const serviceAccount = require(serviceAccountPath);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  } else {
+    // 2. CLOUD RUN: Se il file non c'è (su GitHub/Cloud Run), usa le credenziali predefinite.
+    console.log("Inizializzazione Firebase con Application Default Credentials (Cloud Run).");
+    admin.initializeApp();
+  }
+} catch (error) {
+  console.error("ERRORE CRITICO INIZIALIZZAZIONE FIREBASE:", error);
+  // Non blocchiamo l'avvio del server, così possiamo almeno rispondere agli endpoint di health check
 }
 
 const db = admin.firestore();
