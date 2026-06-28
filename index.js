@@ -51,15 +51,31 @@ function shouldNotifyUser(user) {
     return { shouldNotify: false, reason: 'Utente già notificato per questo ciclo' };
   }
 
-  // 2. Controllo fascia oraria (HH:mm)
-  const currentHour = now.getHours().toString().padStart(2, '0');
-  const currentMinute = now.getMinutes().toString().padStart(2, '0');
-  const currentTimeStr = `${currentHour}:${currentMinute}`;
+  // 2. Controllo fascia oraria (HH:mm) convertito nella timezone dell'utente
+  const timezone = user.timezone || 'Europe/Rome';
+  let currentTimeStr;
+  try {
+    const formatter = new Intl.DateTimeFormat('it-IT', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(now);
+    const hour = parts.find(p => p.type === 'hour').value;
+    const minute = parts.find(p => p.type === 'minute').value;
+    currentTimeStr = `${hour}:${minute}`;
+  } catch (error) {
+    // Fallback in caso di timezone non supportata
+    const currentHour = now.getHours().toString().padStart(2, '0');
+    const currentMinute = now.getMinutes().toString().padStart(2, '0');
+    currentTimeStr = `${currentHour}:${currentMinute}`;
+  }
 
-  const { startTime, endTime } = user.water_settings;
+  const { startTime, endTime } = user.water_settings || {};
   if (startTime && endTime) {
     if (currentTimeStr < startTime || currentTimeStr > endTime) {
-      return { shouldNotify: false, reason: `Fuori fascia oraria (${startTime}-${endTime})` };
+      return { shouldNotify: false, reason: `Fuori fascia oraria (${startTime}-${endTime}) nella timezone ${timezone}` };
     }
   }
 
@@ -82,15 +98,18 @@ app.post('/process-notifications', async (req, res) => {
     const usersSnapshot = await db.collection('users').get();
     const notificationQueue = [];
 
+  
+
     usersSnapshot.forEach(doc => {
       const userData = doc.data();
       const check = shouldNotifyUser(userData);
-      
+          
       if (check.shouldNotify) {
         notificationQueue.push({
           id: doc.id,
           token: userData.fcmToken,
-          name: userData.name || 'Utente'
+          name: userData.name || 'Utente',
+          frequency: userData.water_settings?.frequency
         });
       }
     });
@@ -105,22 +124,43 @@ app.post('/process-notifications', async (req, res) => {
 
     // --- PASSO 4 & 5: Invio e Aggiornamento ---
     for (const user of notificationQueue) {
+      // Struttura richiesta dall'utente (FCM V1 style)
       const message = {
+        token: user.token,
         notification: {
           title: 'Promemoria Idratazione 💧',
           body: `Ciao ${user.name}, è ora di bere un bicchiere d'acqua!`
         },
-        token: user.token
+        data: {
+          utenteId: user.id,
+          tipo: 'idratazione'
+        }
+        /*,
+        webpush: {
+          notification: {
+            icon: 'https://tuo-sito.it/icona-acqua.png', 
+          }
+        }*/
       };
 
+      console.log(`[FCM] Invio notifica a ${user.id}...`);
+      console.log("Payload inviato:", JSON.stringify(message));
+
       try {
+        // Nota: admin.messaging().send(message) accetta l'oggetto senza il wrapper "message" esterno
         const response = await fcm.send(message);
         results.success++;
         
-        // MARCA COME NOTIFICATO
+        // Calcola il prossimo drink time (ora di invio + frequenza in minuti)
+        const frequencyMin = parseInt(user.frequency, 10) || 60; // fallback a 60 min se manca la frequenza
+        const nextDrinkDate = new Date(Date.now() + frequencyMin * 60 * 1000);
+        const nextDrinkStr = nextDrinkDate.toISOString();
+
+        // MARCA COME NOTIFICATO E IMPOSTA IL PROSSIMO CONTROLLO
         await db.collection('users').doc(user.id).update({
-          'water_status.notified': true,
-          'water_status.lastNotifiedAt': admin.firestore.FieldValue.serverTimestamp()
+          'water_status.notified': false, // resettato a false per il prossimo ciclo
+          'water_status.lastNotifiedAt': admin.firestore.FieldValue.serverTimestamp(),
+          'water_status.nextDrink': nextDrinkStr
         });
 
         results.details.push({ id: user.id, status: 'sent', messageId: response });
@@ -131,6 +171,7 @@ app.post('/process-notifications', async (req, res) => {
         if (error.code === 'messaging/registration-token-not-registered' || 
             error.code === 'messaging/invalid-registration-token') {
           await db.collection('users').doc(user.id).update({
+            fcmToken: null,
             fcmExpired: true
           });
           results.details.push({ id: user.id, status: 'token_expired', error: error.code });
@@ -192,3 +233,5 @@ app.get('/', (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`Microservice listening at http://0.0.0.0:${port}`);
 });
+
+module.exports = { shouldNotifyUser, app };
