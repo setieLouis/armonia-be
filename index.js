@@ -92,106 +92,109 @@ function shouldNotifyUser(user) {
   return { shouldNotify: true };
 }
 
+// Funzione core per processare le notifiche
+async function processNotifications() {
+  const usersSnapshot = await db.collection('users').get();
+  const notificationQueue = [];
+
+  usersSnapshot.forEach(doc => {
+    const userData = doc.data();
+    const check = shouldNotifyUser(userData);
+        
+    if (check.shouldNotify) {
+      notificationQueue.push({
+        id: doc.id,
+        token: userData.fcmToken,
+        name: userData.name || 'Utente',
+        frequency: userData.water_settings?.frequency
+      });
+    }
+  });
+
+  console.log(`[Process] Trovati ${notificationQueue.length} utenti da notificare.`);
+
+  const results = {
+    success: 0,
+    failure: 0,
+    details: []
+  };
+
+  // --- PASSO 4 & 5: Invio e Aggiornamento ---
+  for (const user of notificationQueue) {
+    // Struttura richiesta dall'utente (FCM V1 style)
+    const message = {
+      token: user.token,
+      notification: {
+        title: 'Promemoria Idratazione 💧',
+        body: `Ciao ${user.name}, è ora di bere un bicchiere d'acqua!`
+      },
+      data: {
+        utenteId: user.id,
+        tipo: 'idratazione'
+      }
+      /*,
+      webpush: {
+        notification: {
+          icon: 'https://tuo-sito.it/icona-acqua.png', 
+        }
+      }*/
+    };
+
+    console.log(`[FCM] Invio notifica a ${user.id}...`);
+    console.log("Payload inviato:", JSON.stringify(message));
+
+    try {
+      // Nota: admin.messaging().send(message) accetta l'oggetto senza il wrapper "message" esterno
+      const response = await fcm.send(message);
+      results.success++;
+      
+      // Calcola il prossimo drink time (ora di invio + frequenza in minuti)
+      const frequencyMin = parseInt(user.frequency, 10) || 60; // fallback a 60 min se manca la frequenza
+      const nextDrinkDate = new Date(Date.now() + frequencyMin * 60 * 1000);
+      const nextDrinkStr = nextDrinkDate.toISOString();
+
+      // MARCA COME NOTIFICATO E IMPOSTA IL PROSSIMO CONTROLLO
+      await db.collection('users').doc(user.id).update({
+        'water_status.notified': false, // resettato a false per il prossimo ciclo
+        'water_status.lastNotifiedAt': admin.firestore.FieldValue.serverTimestamp(),
+        'water_status.nextDrink': nextDrinkStr
+      });
+
+      results.details.push({ id: user.id, status: 'sent', messageId: response });
+    } catch (error) {
+      results.failure++;
+      
+      // GESTIONE TOKEN SCADUTO
+      if (error.code === 'messaging/registration-token-not-registered' || 
+          error.code === 'messaging/invalid-registration-token') {
+        await db.collection('users').doc(user.id).update({
+          fcmToken: null,
+          fcmExpired: true
+        });
+        results.details.push({ id: user.id, status: 'token_expired', error: error.code });
+      } else {
+        results.details.push({ id: user.id, status: 'error', error: error.code });
+      }
+      console.error(`Errore invio a ${user.id}:`, error);
+    }
+  }
+
+  return {
+    status: 'completed',
+    summary: {
+      totalProcessed: notificationQueue.length,
+      sent: results.success,
+      failed: results.failure
+    },
+    results: results.details
+  };
+}
+
 // Endpoint principale per processare le notifiche
 app.post('/process-notifications', async (req, res) => {
   try {
-    const usersSnapshot = await db.collection('users').get();
-    const notificationQueue = [];
-
-  
-
-    usersSnapshot.forEach(doc => {
-      const userData = doc.data();
-      const check = shouldNotifyUser(userData);
-          
-      if (check.shouldNotify) {
-        notificationQueue.push({
-          id: doc.id,
-          token: userData.fcmToken,
-          name: userData.name || 'Utente',
-          frequency: userData.water_settings?.frequency
-        });
-      }
-    });
-
-    console.log(`[Process] Trovati ${notificationQueue.length} utenti da notificare.`);
-
-    const results = {
-      success: 0,
-      failure: 0,
-      details: []
-    };
-
-    // --- PASSO 4 & 5: Invio e Aggiornamento ---
-    for (const user of notificationQueue) {
-      // Struttura richiesta dall'utente (FCM V1 style)
-      const message = {
-        token: user.token,
-        notification: {
-          title: 'Promemoria Idratazione 💧',
-          body: `Ciao ${user.name}, è ora di bere un bicchiere d'acqua!`
-        },
-        data: {
-          utenteId: user.id,
-          tipo: 'idratazione'
-        }
-        /*,
-        webpush: {
-          notification: {
-            icon: 'https://tuo-sito.it/icona-acqua.png', 
-          }
-        }*/
-      };
-
-      console.log(`[FCM] Invio notifica a ${user.id}...`);
-      console.log("Payload inviato:", JSON.stringify(message));
-
-      try {
-        // Nota: admin.messaging().send(message) accetta l'oggetto senza il wrapper "message" esterno
-        const response = await fcm.send(message);
-        results.success++;
-        
-        // Calcola il prossimo drink time (ora di invio + frequenza in minuti)
-        const frequencyMin = parseInt(user.frequency, 10) || 60; // fallback a 60 min se manca la frequenza
-        const nextDrinkDate = new Date(Date.now() + frequencyMin * 60 * 1000);
-        const nextDrinkStr = nextDrinkDate.toISOString();
-
-        // MARCA COME NOTIFICATO E IMPOSTA IL PROSSIMO CONTROLLO
-        await db.collection('users').doc(user.id).update({
-          'water_status.notified': false, // resettato a false per il prossimo ciclo
-          'water_status.lastNotifiedAt': admin.firestore.FieldValue.serverTimestamp(),
-          'water_status.nextDrink': nextDrinkStr
-        });
-
-        results.details.push({ id: user.id, status: 'sent', messageId: response });
-      } catch (error) {
-        results.failure++;
-        
-        // GESTIONE TOKEN SCADUTO
-        if (error.code === 'messaging/registration-token-not-registered' || 
-            error.code === 'messaging/invalid-registration-token') {
-          await db.collection('users').doc(user.id).update({
-            fcmToken: null,
-            fcmExpired: true
-          });
-          results.details.push({ id: user.id, status: 'token_expired', error: error.code });
-        } else {
-          results.details.push({ id: user.id, status: 'error', error: error.code });
-        }
-        console.error(`Errore invio a ${user.id}:`, error);
-      }
-    }
-
-    res.json({
-      status: 'completed',
-      summary: {
-        totalProcessed: notificationQueue.length,
-        sent: results.success,
-        failed: results.failure
-      },
-      results: results.details
-    });
-
+    const summary = await processNotifications();
+    res.json(summary);
   } catch (error) {
     console.error('Errore durante il processamento notifiche:', error);
     res.status(500).json({ error: 'Errore interno al server' });
@@ -234,4 +237,23 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`Microservice listening at http://0.0.0.0:${port}`);
 });
 
-module.exports = { shouldNotifyUser, app };
+// Scheduler Cron Interno (setInterval)
+const CRON_INTERVAL = process.env.CRON_INTERVAL_MS || 60000; // default 1 minuto
+const DISABLE_CRON = process.env.DISABLE_INTERNAL_CRON === 'true';
+
+if (!DISABLE_CRON) {
+  console.log(`[Cron] Scheduler interno avviato con intervallo di ${CRON_INTERVAL}ms`);
+  setInterval(async () => {
+    console.log(`[Cron] Avvio controllo periodico notifiche...`);
+    try {
+      const summary = await processNotifications();
+      console.log(`[Cron] Completato. Inviate: ${summary.summary.sent}, Fallite: ${summary.summary.failed}`);
+    } catch (error) {
+      console.error(`[Cron] Errore durante l'esecuzione del controllo periodico:`, error);
+    }
+  }, CRON_INTERVAL);
+} else {
+  console.log(`[Cron] Scheduler interno disabilitato via variabile d'ambiente.`);
+}
+
+module.exports = { shouldNotifyUser, processNotifications, app };
